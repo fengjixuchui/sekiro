@@ -8,12 +8,9 @@ import com.virjar.sekiro.api.databind.DirectMapGenerator;
 import com.virjar.sekiro.api.databind.EmptyARCreateHelper;
 import com.virjar.sekiro.api.databind.FieldBindGenerator;
 import com.virjar.sekiro.api.databind.ICRCreateHelper;
-import com.virjar.sekiro.api.databind.InnerClassCreateHelper;
+import com.virjar.sekiro.log.SekiroLogger;
 import com.virjar.sekiro.netty.protocol.SekiroNatMessage;
 import com.virjar.sekiro.utils.Defaults;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -32,7 +29,6 @@ import io.netty.channel.Channel;
 
 
 public class SekiroRequestHandlerManager {
-    private static final Logger log = LoggerFactory.getLogger(SekiroRequestHandlerManager.class);
     private static final String action = "action";
     private static final String actionList = "__actionList";
 
@@ -50,6 +46,7 @@ public class SekiroRequestHandlerManager {
             sekiroRequest.getString("ensure mode parsed");
         } catch (Exception e) {
             sekiroResponse.failed(CommonRes.statusBadRequest, e);
+            return;
         }
 
         String action = sekiroRequest.getString(SekiroRequestHandlerManager.action);
@@ -75,7 +72,7 @@ public class SekiroRequestHandlerManager {
         try {
             actionRequestHandlerGenerator.gen(sekiroRequest).handleRequest(sekiroRequest, sekiroResponse);
         } catch (Throwable throwable) {
-            log.error("failed to generate action request handler", throwable);
+            SekiroLogger.error("failed to generate action request handler", throwable);
             sekiroResponse.failed(CommonRes.statusError, throwable);
         }
     }
