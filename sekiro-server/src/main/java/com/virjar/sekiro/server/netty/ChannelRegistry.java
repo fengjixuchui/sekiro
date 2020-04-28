@@ -2,6 +2,7 @@ package com.virjar.sekiro.server.netty;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.virjar.sekiro.api.CommonRes;
 
 import org.apache.commons.lang3.StringUtils;
 
@@ -9,8 +10,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.BlockingDeque;
-import java.util.concurrent.LinkedBlockingDeque;
 
 import io.netty.channel.Channel;
 import lombok.extern.slf4j.Slf4j;
@@ -45,70 +44,8 @@ public class ChannelRegistry {
         }
     }
 
-    private static class ClientGroup {
-        public ClientGroup(String group) {
-            this.group = group;
-        }
 
-        private String group;
-        private Map<String, NatClient> natClientMap = Maps.newConcurrentMap();
-
-        private BlockingDeque<NatClient> poolQueue = new LinkedBlockingDeque<>();
-
-        public NatClient getByClientId(String clientId) {
-            NatClient ret = natClientMap.get(clientId);
-            if (ret != null && !ret.getCmdChannel().isActive()) {
-                natClientMap.remove(clientId);
-            }
-            return ret;
-        }
-
-        public NatClient allocateOne() {
-            while (true) {
-                NatClient poll = poolQueue.poll();
-                if (poll == null) {
-                    log.info("pool queue empty");
-                    return null;
-                }
-                if (!poll.getCmdChannel().isActive()) {
-                    //TODO queue 的数据结构不合理，需要支持线性remove
-                    NatClient realNatClient = natClientMap.get(poll.getClientId());
-                    if (realNatClient == poll) {
-                        log.info("remove channel for client:{}", poll.getClientId());
-                        natClientMap.remove(poll.getClientId());
-                    }
-                    continue;
-                }
-
-                poolQueue.add(poll);
-                return poll;
-            }
-
-        }
-
-
-        public synchronized void registryClient(String client, Channel cmdChannel) {
-
-            NatClient natClient = natClientMap.get(client);
-            if (natClient != null) {
-                Channel cmdChannelOld = natClient.getCmdChannel();
-                if (cmdChannelOld != cmdChannel) {
-                    log.info("old channel exist,attach again，oldChannel:{}  now channel:{} client:{}", cmdChannelOld, cmdChannel, client);
-                    natClient.attachChannel(cmdChannel);
-                }
-                return;
-            }
-            log.info("register a client :{} with channel:{} ", client, cmdChannel);
-            natClient = new NatClient(client, group, cmdChannel);
-            natClientMap.put(client, natClient);
-            poolQueue.add(natClient);
-        }
-
-
-    }
-
-
-    public synchronized void registryClient(String client, Channel cmdChannel) {
+    public void registryClient(String client, Channel cmdChannel) {
         log.info("register for client:{}", client);
 
         int index = client.indexOf("@");
@@ -158,7 +95,7 @@ public class ChannelRegistry {
         if (clientGroup == null) {
             return Collections.emptyList();
         }
-        Collection<NatClient> natClients = clientGroup.natClientMap.values();
+        Collection<NatClient> natClients = clientGroup.queue();
         List<String> clientVo = Lists.newArrayList();
         for (NatClient natClient : natClients) {
             if (natClient.getCmdChannel() != null && natClient.getCmdChannel().isActive()) {
@@ -173,4 +110,18 @@ public class ChannelRegistry {
         return Lists.newArrayList(clientGroupMap.keySet());
     }
 
+    public CommonRes<?> forceDisconnect(String group, String clientId) {
+        if (group == null) {
+            return CommonRes.failed("need param:{group}");
+        }
+        ClientGroup clientGroup = clientGroupMap.get(group);
+        if (clientGroup == null) {
+            return CommonRes.failed("no group:{" + group + "}");
+        }
+        String errorMessage = clientGroup.disconnect(clientId);
+        if (errorMessage != null) {
+            return CommonRes.failed(errorMessage);
+        }
+        return CommonRes.success("ok");
+    }
 }
