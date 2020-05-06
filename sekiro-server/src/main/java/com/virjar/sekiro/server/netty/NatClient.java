@@ -28,12 +28,18 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 
 @Slf4j
 public class NatClient {
+
+    public enum NatClientType {
+        NORMAL,
+        WS
+    }
 
     @Getter
     private String group;
@@ -43,13 +49,16 @@ public class NatClient {
     @Getter
     private Channel cmdChannel;
 
+    private NatClientType natClientType;
+
     private AtomicInteger timeOutCount = new AtomicInteger(0);
 
-    private AtomicLong invokeSeqGenerator = new AtomicLong(0L);
+    private AtomicLong invokeSeqGenerator = new AtomicLong(1L);
 
-    public NatClient(String clientId, String group, Channel cmdChannel) {
+    public NatClient(String clientId, String group, Channel cmdChannel, NatClientType natClientType) {
         this.clientId = clientId;
         this.group = group;
+        this.natClientType = natClientType;
         attachChannel(cmdChannel);
     }
 
@@ -66,24 +75,31 @@ public class NatClient {
     }
 
     private NettyInvokeRecord forwardInternal(String paramContent) {
-        log.info("request body: {}   clientId:{}", paramContent, clientId);
+        log.info("request body: {}   clientId:{} forward channel:{}", paramContent, clientId, cmdChannel);
         long invokeTaskId = invokeSeqGenerator.incrementAndGet();
         NettyInvokeRecord nettyInvokeRecord = new NettyInvokeRecord(clientId, group, invokeTaskId, paramContent);
 
-        SekiroNatMessage proxyMessage = new SekiroNatMessage();
-        proxyMessage.setType(SekiroNatMessage.TYPE_INVOKE);
-        proxyMessage.setSerialNumber(invokeTaskId);
-        proxyMessage.setData(paramContent.getBytes(Charsets.UTF_8));
         TaskRegistry.getInstance().registerTask(nettyInvokeRecord);
 
-        cmdChannel.writeAndFlush(proxyMessage);
+        if (natClientType == NatClientType.NORMAL) {
+            SekiroNatMessage proxyMessage = new SekiroNatMessage();
+            proxyMessage.setType(SekiroNatMessage.TYPE_INVOKE);
+            proxyMessage.setSerialNumber(invokeTaskId);
+            proxyMessage.setData(paramContent.getBytes(Charsets.UTF_8));
+            cmdChannel.writeAndFlush(proxyMessage);
+        } else {
+            JSONObject jsonObject = JSONObject.parseObject(paramContent);
+            jsonObject.put("__sekiro_seq__", invokeTaskId);
+            TextWebSocketFrame textWebSocketFrame = new TextWebSocketFrame(jsonObject.toJSONString());
+            cmdChannel.writeAndFlush(textWebSocketFrame);
+        }
 
         return nettyInvokeRecord;
     }
 
     private void checkDisconnectForTimeout() {
         if (timeOutCount.get() > 5) {
-            log.warn("连续5次调用超时，主动关闭连接...");
+            log.warn("连续5次调用超时，主动关闭连接...: {}", cmdChannel);
             cmdChannel.close();
         }
     }
@@ -114,7 +130,7 @@ public class NatClient {
 
                 if (StringUtils.containsIgnoreCase(responseContentType, "application/json")) {
                     String responseJson = new String(sekiroNatMessage.getData(), StandardCharsets.UTF_8);
-                    log.info("receive json response:{}", responseJson);
+                    log.info("receive json response:{} from channel:{} ", responseJson, channel);
                     try {
                         JSONObject jsonObject = JSONObject.parseObject(responseJson);
                         ReturnUtil.writeRes(channel, ReturnUtil.from(jsonObject, clientId));
