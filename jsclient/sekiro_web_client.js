@@ -98,9 +98,10 @@ SekiroClient.prototype.resolveWebSocketFactory = function () {
 SekiroClient.prototype.connect = function () {
     console.log('sekiro: begin of connect to wsURL: ' + this.wsURL);
     var _this = this;
-    if (this.socket && this.socket.readyState === 1) {
-        this.socket.close();
-    }
+    // 不check close，让
+    // if (this.socket && this.socket.readyState === 1) {
+    //     this.socket.close();
+    // }
     try {
         this.socket = this.webSocketFactory(this.wsURL);
     } catch (e) {
@@ -119,10 +120,10 @@ SekiroClient.prototype.connect = function () {
     });
 
     this.socket.onclose(function (event) {
-        console.log('sekiro: disconnected ,reconnection after 20s');
+        console.log('sekiro: disconnected ,reconnection after 2s');
         setTimeout(function () {
             _this.connect()
-        }, 2000)
+        }, 200)
     });
 };
 
@@ -143,11 +144,20 @@ SekiroClient.prototype.handleSekiroRequest = function (requestJson) {
 
     var theHandler = this.handlers[action];
     var _this = this;
-    theHandler(request, function (response) {
-        _this.sendSuccess(seq, response)
-    }, function (errorMessage) {
-        _this.sendFailed(seq, errorMessage)
-    })
+    try {
+        theHandler(request, function (response) {
+            try {
+                _this.sendSuccess(seq, response)
+            } catch (e) {
+                _this.sendFailed(seq, "e:" + e);
+            }
+        }, function (errorMessage) {
+            _this.sendFailed(seq, errorMessage)
+        })
+    } catch (e) {
+        console.log("error: " + e);
+        _this.sendFailed(seq, ":" + e);
+    }
 };
 
 SekiroClient.prototype.sendSuccess = function (seq, response) {
@@ -184,7 +194,30 @@ SekiroClient.prototype.sendSuccess = function (seq, response) {
     responseJson['__sekiro_seq__'] = seq;
     var responseText = JSON.stringify(responseJson);
     console.log("response :" + responseText);
-    this.socket.send(responseText)
+
+
+    if (responseText.length < 1024 * 15) {
+        this.socket.send(responseText);
+        return;
+    }
+
+    //大报文要分段传输
+    var segmentSize = 1024 ;
+    var i = 0, totalFrameIndex = Math.floor(responseText.length / segmentSize) + 1;
+
+    for (; i < totalFrameIndex; i++) {
+        var frameData = JSON.stringify({
+                __sekiro_frame_total: totalFrameIndex,
+                __sekiro_index: i,
+                __sekiro_seq__: seq,
+                __sekiro_is_frame: true,
+                __sekiro_content: responseText.substring(i * segmentSize, (i + 1) * segmentSize)
+            }
+        );
+        console.log("frame: " + frameData);
+        this.socket.send(frameData);
+    }
+
 };
 
 SekiroClient.prototype.sendFailed = function (seq, errorMessage) {

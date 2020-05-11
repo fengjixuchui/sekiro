@@ -85,6 +85,8 @@ public class SekiroWebSocketHandler extends SimpleChannelInboundHandler<Object> 
             jsonObject = JSONObject.parseObject(request);
         } catch (Exception e) {
             log.error("the ws client response none json format data", e);
+            // js的json好像和fastjson不一样
+            log.warn("error response data: " + request);
             ctx.channel().close();
             return;
         }
@@ -106,13 +108,16 @@ public class SekiroWebSocketHandler extends SimpleChannelInboundHandler<Object> 
             return;
         }
 
-        SekiroNatMessage sekiroNatMessage = new SekiroNatMessage();
-        sekiroNatMessage.setType(SekiroNatMessage.TYPE_INVOKE);
-        sekiroNatMessage.setSerialNumber(serialNumber);
-        sekiroNatMessage.setExtra("application/json;charset=utf-8");
-        sekiroNatMessage.setData(jsonObject.toJSONString().getBytes(StandardCharsets.UTF_8));
-
-        TaskRegistry.getInstance().forwardClientResponse(clientId, group, serialNumber, sekiroNatMessage);
+        if (!jsonObject.getBooleanValue("__sekiro_is_frame")) {
+            SekiroNatMessage sekiroNatMessage = new SekiroNatMessage();
+            sekiroNatMessage.setType(SekiroNatMessage.TYPE_INVOKE);
+            sekiroNatMessage.setSerialNumber(serialNumber);
+            sekiroNatMessage.setExtra("application/json;charset=utf-8");
+            sekiroNatMessage.setData(jsonObject.toJSONString().getBytes(StandardCharsets.UTF_8));
+            TaskRegistry.getInstance().forwardClientResponse(clientId, group, serialNumber, sekiroNatMessage);
+        } else {
+            WebSocketMessageAggregator.onWebSocketFrame(clientId, group, serialNumber, jsonObject);
+        }
 
     }
 
@@ -142,8 +147,9 @@ public class SekiroWebSocketHandler extends SimpleChannelInboundHandler<Object> 
             return;
         }
 
+        //最大4M报文
         WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(
-                "ws://" + req.headers().get(HttpHeaders.Names.HOST) + "/websocket", null, false);
+                "ws://" + req.headers().get(HttpHeaders.Names.HOST) + "/websocket", null, false, 1 << 25);
         handshaker = wsFactory.newHandshaker(req);
         if (handshaker == null) {
             WebSocketServerHandshakerFactory
